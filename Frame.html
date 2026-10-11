@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sandbox Simulator</title>
+<style>
+  :root {
+    --bg: #1b2230; --panel: #252d3f; --edge: #36405a; --ink: #e6ebf5; --dim: #8f9bb5;
+    --accent: #6cb6ff; --stop: #ff7b72; --go: #7ee0a3; --screen: #0c1018;
+    font-family: "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); }
+  body { display: flex; flex-direction: column; gap: 12px; padding: 14px; max-width: 1100px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  h1 { font-size: 1.05rem; font-weight: 600; margin: 0; margin-right: auto; }
+  .bar { display: flex; gap: 6px; background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 5px; }
+  .btn { display: inline-flex; align-items: center; gap: 7px; background: transparent; color: var(--ink); border: 0; border-radius: 7px; padding: 8px 12px; font: inherit; font-size: .9rem; cursor: pointer; }
+  .btn:hover:not(:disabled) { background: var(--edge); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn svg { width: 17px; height: 17px; fill: currentColor; }
+  .btn.run svg { color: var(--go); } .btn.stop svg { color: var(--stop); }
+  .btn[aria-pressed="true"] { background: var(--edge); }
+  #stage { position: relative; background: var(--screen); border: 1px solid var(--edge); border-radius: 10px; display: grid; place-items: center; overflow: hidden; }
+  #stage:fullscreen { border-radius: 0; border: 0; }
+  canvas#canvas { display: block; max-width: 100%; max-height: 100%; background: var(--screen); outline: none; }
+  #stage:not(:fullscreen) canvas#canvas { width: 100%; height: auto; aspect-ratio: 4 / 3; max-height: 68vh; object-fit: contain; }
+  #loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); background: var(--screen); font-size: .95rem; }
+  #loading.done { display: none; }
+  #status { color: var(--dim); font-size: .85rem; }
+  #console { background: var(--screen); border: 1px solid var(--edge); border-radius: 10px; height: 130px; overflow: auto; margin: 0; padding: 10px 12px; font: 12.5px/1.5 ui-monospace, Consolas, monospace; color: #b8c4dc; white-space: pre-wrap; }
+  #console .err { color: var(--stop); }
+  @media (max-width: 560px) { .btn span { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sandbox Simulator</h1>
+  <div class="bar" role="toolbar" aria-label="Simulation controls">
+    <button class="btn run" id="run" disabled title="Run">
+      <svg viewBox="0 0 24 24"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg><span>Run</span>
+    </button>
+    <button class="btn stop" id="stop" disabled title="Stop (pause)">
+      <svg viewBox="0 0 24 24"><rect x="6" y="5" width="4.5" height="14" rx="1"/><rect x="13.5" y="5" width="4.5" height="14" rx="1"/></svg><span>Stop</span>
+    </button>
+    <button class="btn" id="reset" disabled title="Reset">
+      <svg viewBox="0 0 24 24"><path d="M12 5a7 7 0 1 1-6.7 9h2.1A5 5 0 1 0 12 7v3L7 6l5-4z"/></svg><span>Reset</span>
+    </button>
+    <button class="btn" id="mute" disabled aria-pressed="false" title="Mute audio">
+      <svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4zm12.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4z"/></svg><span>Sound</span>
+    </button>
+    <button class="btn" id="full" disabled title="Fullscreen">
+      <svg viewBox="0 0 24 24"><path d="M4 4h6v2H6v4H4V4zm10 0h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 0h2v6h-6v-2h4v-4z"/></svg><span>Fullscreen</span>
+    </button>
+  </div>
+</header>
+
+<div id="stage">
+  <canvas id="canvas" width="800" height="600" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+  <div id="loading">Loading simulation…</div>
+</div>
+<div id="status">Loading…</div>
+<pre id="console" aria-live="polite"></pre>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const stage = $('stage'), out = $('console'), statusEl = $('status');
+  let running = false, muted = false;
+
+  function log(text, cls) {
+    const line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = text;
+    out.appendChild(line);
+    out.scrollTop = out.scrollHeight;
+  }
+  function setRunning(on) {
+    running = on;
+    $('run').disabled = on; $('stop').disabled = !on;
+    statusEl.textContent = on ? 'Running' : 'Stopped';
+  }
+  // Calls an exported C++ function if it exists (see EXPORTED_FUNCTIONS in the build command).
+  function call(name) {
+    if (Module['_' + name]) Module['_' + name]();
+  }
+
+  var Module = {
+    canvas: $('canvas'),
+    print: t => log(t),
+    printErr: t => log(t, 'err'),
+    setStatus: t => { if (t) statusEl.textContent = t; },
+    onRuntimeInitialized() {
+      $('loading').classList.add('done');
+      ['reset', 'mute', 'full'].forEach(id => $(id).disabled = false);
+      setRunning(true); // main loop starts automatically
+      $('canvas').focus();
+    },
+    onAbort: () => { log('Simulation crashed. See messages above.', 'err'); setRunning(false); }
+  };
+
+  $('run').onclick = () => { call('sim_resume'); setRunning(true); $('canvas').focus(); };
+  $('stop').onclick = () => { call('sim_pause'); setRunning(false); };
+  $('reset').onclick = () => { call('sim_reset'); };
+  $('full').onclick = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else stage.requestFullscreen().then(() => $('canvas').focus());
+  };
+  $('mute').onclick = () => {
+    muted = !muted;
+    $('mute').setAttribute('aria-pressed', muted);
+    call(muted ? 'sim_mute' : 'sim_unmute');
+  };
+  window.addEventListener('keydown', e => {
+    // keep space/arrows from scrolling the page while the sim has focus
+    if (document.activeElement === $('canvas') && [' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
+  });
+  window.addEventListener('error', () => $('loading').textContent = 'Failed to load the simulation.');
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>
