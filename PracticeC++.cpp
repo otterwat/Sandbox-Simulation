@@ -10,8 +10,5 @@ int main() {
 	std::cout << "They're really tuff!" << '\n';
 	std::cout << "I ate " << x << " " << food << " today!" << '\n';
 
-
-	double int result = 0.0;
-
-	return result;
+	return 0;
 }
